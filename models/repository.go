@@ -7,4 +7,5 @@ type Repository interface {
 	Seed()
 
 	GetProductPage(page, pageSize int) (products []Product, totalAvailable int)
+	GetProductPageCategory(categoryId int, page, pageSize int) (products []Product, totalAvailable int)
 }

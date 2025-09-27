@@ -14,23 +14,25 @@ type ProductHandler struct {
 	URLGenerator handling.URLGenerator
 }
 type ProductTemplateContext struct {
-	Products    []models.Product
-	Page        int
-	PageCount   int
-	PageNumbers []int
-	PageUrlFunc func(int) string
+	Products         []models.Product
+	Page             int
+	PageCount        int
+	PageNumbers      []int
+	PageUrlFunc      func(int) string
+	SelectedCategory int
 }
 
-func (handler ProductHandler) GetProducts(page int) actionresults.ActionResult {
-	shownProds, totalProds := handler.Repository.GetProductPage(page, pageSize)
-	pageCount := int(math.Ceil(float64(totalProds) / float64(pageSize)))
-	return actionresults.NewTemplateAction("store_layout.html",
+func (handler ProductHandler) GetProducts(category, page int) actionresults.ActionResult {
+	prods, total := handler.Repository.GetProductPageCategory(category, page, pageSize)
+	pageCount := int(math.Ceil(float64(total) / float64(pageSize)))
+	return actionresults.NewTemplateAction("product_list.html",
 		ProductTemplateContext{
-			Products:    shownProds,
-			Page:        page,
-			PageCount:   pageCount,
-			PageNumbers: handler.generatePageNumbers(pageCount),
-			PageUrlFunc: handler.createPageUrlFunction(),
+			Products:         prods,
+			Page:             page,
+			PageCount:        pageCount,
+			PageNumbers:      handler.generatePageNumbers(pageCount),
+			PageUrlFunc:      handler.createPageUrlFunction(category),
+			SelectedCategory: category,
 		})
 }
 
@@ -42,9 +44,9 @@ func (handler ProductHandler) generatePageNumbers(pageCount int) (pages []int) {
 	return
 }
 
-func (handler ProductHandler) createPageUrlFunction() func(int) string {
-	return func(pageNum int) string {
-		url, _ := handler.URLGenerator.GenerateUrl(ProductHandler.GetProducts, pageNum)
+func (handler ProductHandler) createPageUrlFunction(category int) func(int) string {
+	return func(page int) string {
+		url, _ := handler.URLGenerator.GenerateUrl(ProductHandler.GetProducts, category, page)
 		return url
 	}
 }
