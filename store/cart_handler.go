@@ -51,3 +51,10 @@ func (handler CartHandler) mustGenerateUrl(method interface{}, data ...interface
 	}
 	return url
 }
+
+func (handler CartHandler) GetWidget() actionresults.ActionResult {
+	return actionresults.NewTemplateAction("cart_widget.html", CartTemplateContext{
+		Cart:    handler.Cart,
+		CartUrl: handler.mustGenerateUrl(CartHandler.GetCart),
+	})
+}
