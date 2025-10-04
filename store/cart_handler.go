@@ -25,6 +25,7 @@ func (handler CartHandler) GetCart() actionresults.ActionResult {
 		CartTemplateContext{
 			Cart:           handler.Cart,
 			ProductListUrl: handler.mustGenerateUrl(ProductHandler.GetProducts, 0, 1),
+			CheckoutUrl:    handler.mustGenerateUrl(OrderHandler.GetCheckout),
 			RemoveUrl:      handler.mustGenerateUrl(CartHandler.PostRemoveFromCart),
 		})
 }
