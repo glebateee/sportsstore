@@ -1,0 +1,25 @@
+name: Go Tests  # Название workflow (видно в UI GitHub)
+
+on:  # Триггеры: когда запускать
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:  # Список заданий (jobs)
+  test:
+    runs-on: ubuntu-latest  # ОС: Linux (дефолт, бесплатно)
+    steps:  # Шаги внутри job
+      - name: Checkout code  # Шаг 1: Клонируем репозиторий
+        uses: actions/checkout@v4  # Официальный action от GitHub
+
+      - name: Set up Go  # Шаг 2: Устанавливаем Go
+        uses: actions/setup-go@v5  # Официальный action
+        with:
+          go-version: '1.21'  # Версия Go (обнови под свой проект)
+
+      - name: Tidy modules  # Шаг 3: Очищаем/обновляем зависимости
+        run: go mod tidy
+
+      - name: Run tests  # Шаг 4: Запускаем тесты
+        run: go test -v ./...  # -v: verbose output; ./...: все пакеты
