@@ -2,8 +2,6 @@ module sportsstore
 
 go 1.23.3
 
-toolchain go1.24.7
-
 require platform v1.0.0
 
 require (

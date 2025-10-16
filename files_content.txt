@@ -1,0 +1,2000 @@
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\main.go 
+package main
+
+import (
+	"platform/http"
+	"platform/http/handling"
+	"platform/pipeline"
+	"platform/pipeline/basic"
+	"platform/services"
+	"platform/sessions"
+	"sportsstore/admin"
+	"sportsstore/models/repo"
+	"sportsstore/store"
+	"sportsstore/store/cart"
+	"sync"
+)
+
+func registerServices() {
+	services.RegisterDefaultServices()
+	//repo.RegisterMemoryRepoService()
+	repo.RegisterSqlRepositoryService()
+	sessions.RegisterSessionService()
+	cart.RegisterCartService()
+}
+func createPipeline() pipeline.RequestPipeline {
+	return pipeline.CreatePipeline(
+		&basic.ServicesComponent{},
+		&basic.LoggingComponent{},
+		&basic.ErrorComponent{},
+		&basic.StaticFileComponent{},
+		&sessions.SessionComponent{},
+		handling.NewRouter(
+			handling.HandlerEntry{Prefix: "", Handler: store.ProductHandler{}},
+			handling.HandlerEntry{Prefix: "", Handler: store.CategoryHandler{}},
+			handling.HandlerEntry{Prefix: "", Handler: store.CartHandler{}},
+			handling.HandlerEntry{Prefix: "", Handler: store.OrderHandler{}},
+			handling.HandlerEntry{Prefix: "admin", Handler: admin.AdminHandler{}},
+			handling.HandlerEntry{Prefix: "admin", Handler: admin.ProductsHandler{}},
+			handling.HandlerEntry{Prefix: "admin", Handler: admin.CategoriesHandler{}},
+			handling.HandlerEntry{Prefix: "admin", Handler: admin.OrdersHandler{}},
+			handling.HandlerEntry{Prefix: "admin", Handler: admin.DatabaseHandler{}},
+		).
+			AddMethodAlias("/", store.ProductHandler.GetProducts, 0, 1).
+			AddMethodAlias("/products[/]?[A-z0-9]*?", store.ProductHandler.GetProducts, 0, 1).
+			AddMethodAlias("/admin[/]?", admin.AdminHandler.GetSection, ""),
+	)
+}
+func main() {
+	registerServices()
+	results, err := services.Call(http.Serve, createPipeline())
+	if err == nil {
+		(results[0].(*sync.WaitGroup)).Wait()
+	} else {
+		panic(err)
+	}
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\config.json 
+{
+    "logging" : {
+        "level": "debug"
+    },
+    "files": {
+        "path": "files"
+    },
+    "templates": {
+        "path": "templates/*.html",
+        "reload": true
+    },
+    "sessions": {
+        "key": "MY_SESSION_KEY",
+        "cyclekey": true
+    },
+    "sql": {
+        "connection_str": "store.db",
+        "always_reset": true,
+        "commands": {
+            "Init":                 "sql/init_db.sql",
+            "Seed":                 "sql/seed_db.sql",
+            "GetProduct":           "sql/get_product.sql",
+            "GetProducts":          "sql/get_products.sql",
+            "GetCategories":        "sql/get_categories.sql",
+            "GetPage":              "sql/get_product_page.sql",
+            "GetPageCount":         "sql/get_page_count.sql",
+            "GetCategoryPage":      "sql/get_category_product_page.sql",
+            "GetCategoryPageCount": "sql/get_category_product_page_count.sql",
+            "GetOrder":             "sql/get_order.sql",
+            "GetOrderLines":        "sql/get_order_lines.sql",
+            "GetOrders":            "sql/get_orders.sql",
+            "GetOrdersLines":       "sql/get_orders_lines.sql",
+            "SaveOrder":            "sql/save_order.sql",
+            "SaveOrderLine":        "sql/save_order_line.sql",
+            "SaveProduct":          "sql/save_product.sql",
+            "UpdateProduct":        "sql/update_product.sql",
+            "SaveCategory":         "sql/save_category.sql",
+            "UpdateCategory":       "sql/update_category.sql",
+            "UpdateOrder":          "sql/update_order.sql"
+        }
+    }
+} 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\admin\category_handler.go 
+package admin
+
+import (
+	"platform/http/actionresults"
+	"platform/http/handling"
+	"platform/sessions"
+	"sportsstore/models"
+)
+
+type CategoriesHandler struct {
+	models.Repository
+	handling.URLGenerator
+	sessions.Session
+}
+
+type CategoryTemplateContext struct {
+	Categories []models.Category
+	EditId     int
+	EditUrl    string
+	SaveUrl    string
+}
+
+const CATEGORY_EDIT_KEY string = "category_edit"
+
+func (handler CategoriesHandler) GetData() actionresults.ActionResult {
+	return actionresults.NewTemplateAction("admin_categories.html", CategoryTemplateContext{
+		Categories: handler.Repository.GetCategories(),
+		EditId:     handler.Session.GetValueDefault(CATEGORY_EDIT_KEY, 0).(int),
+		EditUrl:    mustGenerateUrl(handler.URLGenerator, CategoriesHandler.PostCategoryEdit),
+		SaveUrl:    mustGenerateUrl(handler.URLGenerator, CategoriesHandler.PostCategorySave),
+	})
+}
+
+func (handler CategoriesHandler) PostCategoryEdit(ref EditReference) actionresults.ActionResult {
+	handler.Session.SetValue(CATEGORY_EDIT_KEY, ref.ID)
+	return actionresults.NewRedirectAction(mustGenerateUrl(handler.URLGenerator, AdminHandler.GetSection, "Categories"))
+}
+
+func (handler CategoriesHandler) PostCategorySave(c models.Category) actionresults.ActionResult {
+	handler.Repository.SaveCategory(&c)
+	handler.Session.SetValue(CATEGORY_EDIT_KEY, 0)
+	return actionresults.NewRedirectAction(mustGenerateUrl(handler.URLGenerator, AdminHandler.GetSection, "Categories"))
+}
+
+func (handler CategoriesHandler) GetSelect(current int) actionresults.ActionResult {
+	return actionresults.NewTemplateAction("select_category.html", struct {
+		Current    int
+		Categories []models.Category
+	}{Current: current, Categories: handler.GetCategories()})
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\admin\database_handler.go 
+package admin
+
+import (
+	"platform/http/actionresults"
+	"platform/http/handling"
+	"sportsstore/models"
+)
+
+type DatabaseHandler struct {
+	models.Repository
+	handling.URLGenerator
+}
+
+func (handler DatabaseHandler) GetData() actionresults.ActionResult {
+	return actionresults.NewTemplateAction("admin_database.html", struct {
+		InitUrl, SeedUrl string
+	}{InitUrl: mustGenerateUrl(handler.URLGenerator, DatabaseHandler.PostDatabaseInit),
+		SeedUrl: mustGenerateUrl(handler.URLGenerator, DatabaseHandler.PostDatabaseSeed)})
+}
+
+func (handler DatabaseHandler) PostDatabaseInit() actionresults.ActionResult {
+	handler.Repository.Init()
+	return actionresults.NewRedirectAction(mustGenerateUrl(handler.URLGenerator, AdminHandler.GetSection, "Database"))
+}
+
+func (handler DatabaseHandler) PostDatabaseSeed() actionresults.ActionResult {
+	handler.Repository.Seed()
+	return actionresults.NewRedirectAction(mustGenerateUrl(handler.URLGenerator, AdminHandler.GetSection, "Database"))
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\admin\main_handler.go 
+package admin
+
+import (
+	"platform/http/actionresults"
+	"platform/http/handling"
+)
+
+var sectionNames = []string{"Products", "Categories", "Orders", "Database"}
+
+type AdminHandler struct {
+	handling.URLGenerator
+}
+
+type AdminTemplateContext struct {
+	Sections       []string
+	ActiveSection  string
+	SectionUrlFunc func(string) string
+}
+
+func (handler AdminHandler) GetSection(section string) actionresults.ActionResult {
+	return actionresults.NewTemplateAction("admin.html", AdminTemplateContext{
+		Sections:      sectionNames,
+		ActiveSection: section,
+		SectionUrlFunc: func(sec string) string {
+			sectionUrl, _ := handler.URLGenerator.GenerateUrl(AdminHandler.GetSection, sec)
+			return sectionUrl
+		},
+	})
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\admin\orders_handler.go 
+package admin
+
+import (
+	"platform/http/actionresults"
+	"platform/http/handling"
+	"sportsstore/models"
+)
+
+type OrdersHandler struct {
+	models.Repository
+	handling.URLGenerator
+}
+
+func (handler OrdersHandler) GetData() actionresults.ActionResult {
+	return actionresults.NewTemplateAction("admin_orders.html",
+		struct {
+			Orders      []models.Order
+			CallbackUrl string
+		}{Orders: handler.Repository.GetOrders(),
+			CallbackUrl: mustGenerateUrl(handler.URLGenerator,
+				OrdersHandler.PostOrderToggle),
+		})
+}
+func (handler OrdersHandler) PostOrderToggle(ref EditReference) actionresults.ActionResult {
+	order := handler.Repository.GetOrder(ref.ID)
+	order.Shipped = !order.Shipped
+	handler.Repository.SetOrderShipped(&order)
+	return actionresults.NewRedirectAction(mustGenerateUrl(handler.URLGenerator,
+		AdminHandler.GetSection, "Orders"))
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\admin\products_handler.go 
+package admin
+
+import (
+	"platform/http/actionresults"
+	"platform/http/handling"
+	"platform/sessions"
+	"sportsstore/models"
+)
+
+type ProductsHandler struct {
+	models.Repository
+	handling.URLGenerator
+	sessions.Session
+}
+
+type ProductTemplateContext struct {
+	Products []models.Product
+	EditId   int
+	EditUrl  string
+	SaveUrl  string
+}
+
+const PRODUCT_EDIT_KEY string = "product_edit"
+
+func (handler ProductsHandler) GetData() actionresults.ActionResult {
+	return actionresults.NewTemplateAction("admin_products.html", ProductTemplateContext{
+		Products: handler.GetProducts(),
+		EditId:   handler.Session.GetValueDefault(PRODUCT_EDIT_KEY, 0).(int),
+		EditUrl:  mustGenerateUrl(handler.URLGenerator, ProductsHandler.PostProductEdit),
+		SaveUrl:  mustGenerateUrl(handler.URLGenerator, ProductsHandler.PostProductSave),
+	})
+}
+
+type EditReference struct {
+	ID int
+}
+
+func (handler ProductsHandler) PostProductEdit(ref EditReference) actionresults.ActionResult {
+	handler.Session.SetValue(PRODUCT_EDIT_KEY, ref.ID)
+	return actionresults.NewRedirectAction(mustGenerateUrl(handler.URLGenerator, AdminHandler.GetSection, "Products"))
+}
+
+type ProductSaveReference struct {
+	Id                int
+	Name, Description string
+	Category          int
+	Price             float64
+}
+
+func (handler ProductsHandler) PostProductSave(p ProductSaveReference) actionresults.ActionResult {
+	handler.Repository.SaveProduct(&models.Product{
+		ID: p.Id, Name: p.Name, Description: p.Description,
+		Category: &models.Category{ID: p.Category},
+		Price:    p.Price,
+	})
+	handler.Session.SetValue(PRODUCT_EDIT_KEY, 0)
+	return actionresults.NewRedirectAction(mustGenerateUrl(handler.URLGenerator, AdminHandler.GetSection, "Products"))
+}
+
+func mustGenerateUrl(gen handling.URLGenerator, target interface{}, data ...interface{}) string {
+	url, err := gen.GenerateUrl(target, data...)
+	if err != nil {
+		panic(err)
+	}
+	return url
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\category.go 
+package models
+
+type Category struct {
+	ID           int
+	CategoryName string
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\order.go 
+package models
+
+type Order struct {
+	ID int
+	ShippingDetails
+	Products []ProductSelection
+	Shipped  bool
+}
+
+type ShippingDetails struct {
+	Name       string `validation:"required"`
+	StreetAddr string `validation:"required"`
+	City       string `validation:"required"`
+	State      string `validation:"required"`
+	Zip        string `validation:"required"`
+	Country    string `validation:"required"`
+}
+
+type ProductSelection struct {
+	Quantity int
+	Product
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\product.go 
+package models
+
+type Product struct {
+	ID          int
+	Name        string
+	Description string
+	Price       float64
+	*Category
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repository.go 
+package models
+
+type Repository interface {
+	GetProduct(id int) Product
+	GetProducts() []Product
+	SaveProduct(*Product)
+	GetCategories() []Category
+	SaveCategory(*Category)
+
+	GetProductPage(page, pageSize int) (products []Product, totalAvailable int)
+	GetProductPageCategory(categoryId int, page, pageSize int) (products []Product, totalAvailable int)
+
+	GetOrder(id int) Order
+	GetOrders() []Order
+	SaveOrder(*Order)
+	SetOrderShipped(*Order)
+
+	Seed()
+	Init()
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\memory_repo.go 
+package repo
+
+import (
+	"math"
+	"sportsstore/models"
+)
+
+// func RegisterMemoryRepoService() {
+// 	services.AddSingleton(func() models.Repository {
+// 		repo := &MemoryRepo{}
+// 		repo.Seed()
+// 		return repo
+// 	})
+// }
+
+type MemoryRepo struct {
+	products   []models.Product
+	categories []models.Category
+}
+
+func (repo *MemoryRepo) GetProduct(id int) (product models.Product) {
+	for _, p := range repo.products {
+		if p.ID == id {
+			product = p
+			return
+		}
+	}
+	return
+}
+func (repo *MemoryRepo) GetProducts() (results []models.Product) {
+	return repo.products
+}
+
+func (repo *MemoryRepo) GetCategories() (results []models.Category) {
+	return repo.categories
+}
+
+func (repo *MemoryRepo) GetProductPage(page, pageSize int) ([]models.Product, int) {
+	return getPage(repo.products, page, pageSize), len(repo.products)
+}
+
+func getPage(src []models.Product, page, pageSize int) []models.Product {
+	start := (page - 1) * pageSize
+	if page > 0 && len(src) > start {
+		end := int(math.Min(float64(len(src)), float64(start+pageSize)))
+		return src[start:end]
+	}
+	return []models.Product{}
+}
+
+func (repo *MemoryRepo) GetProductPageCategory(category int, page, pageSize int) (products []models.Product, totalAvailable int) {
+	if category == 0 {
+		return repo.GetProductPage(page, pageSize)
+	} else {
+		filteredProducts := make([]models.Product, 0, len(repo.products))
+		for _, p := range repo.products {
+			if p.Category.ID == category {
+				filteredProducts = append(filteredProducts, p)
+			}
+		}
+		return getPage(filteredProducts, page, pageSize), len(filteredProducts)
+	}
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\memory_repo_seed.go 
+package repo
+
+import (
+	"fmt"
+	"math/rand"
+	"sportsstore/models"
+)
+
+func (repo *MemoryRepo) Seed() {
+	repo.categories = make([]models.Category, 3)
+	for i := 0; i < 3; i++ {
+		catName := fmt.Sprintf("Category_%v", i+1)
+		repo.categories[i] = models.Category{ID: i + 1, CategoryName: catName}
+	}
+	for i := 0; i < 21; i++ {
+		name := fmt.Sprintf("Product_%v", i+1)
+		price := rand.Float64() * float64(rand.Intn(500))
+		cat := &repo.categories[rand.Intn(len(repo.categories))]
+		repo.products = append(repo.products, models.Product{
+			ID:   i + 1,
+			Name: name, Price: price,
+			Description: fmt.Sprintf("%v (%v)", name, cat.CategoryName),
+			Category:    cat,
+		})
+	}
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_basic_methods.go 
+package repo
+
+import "sportsstore/models"
+
+func (repo *SqlRepository) GetProduct(id int) (p models.Product) {
+	row := repo.Commands.GetProduct.QueryRowContext(repo.Context, id)
+	if row.Err() == nil {
+		var err error
+		if p, err = scanProduct(row); err != nil {
+			repo.Logger.Panicf("Cannot scan data: %v", err.Error())
+		}
+	} else {
+		repo.Logger.Panicf("Cannot exec GetProduct command: %v", row.Err().Error())
+	}
+	return
+}
+
+func (repo *SqlRepository) GetProducts() (results []models.Product) {
+	rows, err := repo.Commands.GetProducts.QueryContext(repo.Context)
+	if err == nil {
+		if results, err = scanProducts(rows); err != nil {
+			repo.Logger.Panicf("Cannot scan data: %v", err.Error())
+			return
+		}
+	} else {
+		repo.Logger.Panicf("Cannot exec GetProducts command: %v", err)
+	}
+	return
+}
+
+func (repo *SqlRepository) GetCategories() (results []models.Category) {
+	results = make([]models.Category, 0, 10)
+	rows, err := repo.Commands.GetCategories.QueryContext(repo.Context)
+	if err == nil {
+		for rows.Next() {
+			c := models.Category{}
+			if err := rows.Scan(&c.ID, &c.CategoryName); err != nil {
+				repo.Logger.Panicf("Cannot scan data: %v", err.Error())
+			}
+			results = append(results, c)
+		}
+	} else {
+		repo.Logger.Panicf("Cannot exec GetCategories command: %v",
+			err)
+	}
+	return results
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_category_save.go 
+package repo
+
+import "sportsstore/models"
+
+func (repo *SqlRepository) SaveCategory(c *models.Category) {
+	if c.ID == 0 {
+		result, err := repo.Commands.SaveCategory.ExecContext(repo.Context, c.CategoryName)
+		if err == nil {
+			id, err := result.LastInsertId()
+			if err == nil {
+				c.ID = int(id)
+				return
+			} else {
+				repo.Logger.Panicf("Cannot get inserted ID: %v", err.Error())
+			}
+		} else {
+			repo.Logger.Panicf("Cannot exec SaveCategory command: %v", err.Error())
+		}
+	} else {
+		result, err := repo.Commands.UpdateCategory.ExecContext(repo.Context, c.CategoryName, c.ID)
+		if err == nil {
+			affected, err := result.RowsAffected()
+			if err == nil && affected != 1 {
+				repo.Logger.Panicf("Got unexpected rows affected: %v", affected)
+			} else if err != nil {
+				repo.Logger.Panicf("Cannot get rows affected: %v", err)
+			}
+		} else {
+			repo.Logger.Panicf("Cannot exec UpdateCategory command: %v", err.Error())
+		}
+	}
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_initseed.go 
+package repo
+
+func (repo *SqlRepository) Init() {
+	if _, err := repo.Commands.Init.ExecContext(repo.Context); err != nil {
+		repo.Logger.Panic("Cannot exec init command")
+	}
+}
+
+func (repo *SqlRepository) Seed() {
+	if _, err := repo.Commands.Seed.ExecContext(repo.Context); err != nil {
+		repo.Logger.Panic("Cannot exec seed command")
+	}
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_loader.go 
+package repo
+
+import (
+	"database/sql"
+	"os"
+	"platform/config"
+	"platform/logging"
+	"reflect"
+
+	_ "modernc.org/sqlite"
+)
+
+func openDB(config config.Configuration, logger logging.Logger) (db *sql.DB, commands *SqlCommands, needInit bool) {
+	driver := config.GetStringDefault("sql:driver_name", "sqlite")
+	connectionStr, found := config.GetString("sql:connection_str")
+	if !found {
+		logger.Panic("Cannot read SQL connection string from config")
+		return
+	}
+	if _, err := os.Stat(connectionStr); os.IsNotExist(err) {
+		needInit = true
+	}
+	var err error
+	if db, err = sql.Open(driver, connectionStr); err == nil {
+		commands = loadCommands(db, config, logger)
+	} else {
+		logger.Panic(err.Error())
+	}
+	return
+}
+
+func loadCommands(db *sql.DB, config config.Configuration, logger logging.Logger) (commands *SqlCommands) {
+	commands = &SqlCommands{}
+	commandVal := reflect.ValueOf(commands).Elem()
+	commandType := reflect.TypeOf(commands).Elem()
+	for i := range commandType.NumField() {
+		commandName := commandType.Field(i).Name
+		logger.Debugf("Loading SQL command: %v", commandName)
+		stmt := prepareCommand(db, commandName, config, logger)
+		commandVal.Field(i).Set(reflect.ValueOf(stmt))
+	}
+	return commands
+}
+
+func prepareCommand(db *sql.DB, command string, config config.Configuration, logger logging.Logger) *sql.Stmt {
+	filename, found := config.GetString("sql:commands:" + command)
+	if !found {
+		logger.Panicf("Config does not contain location for SQL command: %v", command)
+	}
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		logger.Panicf("Cannot read SQL command file: %v", filename)
+	}
+	statement, err := db.Prepare(string(data))
+	if err != nil {
+		logger.Panicf(err.Error())
+	}
+	return statement
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_orders_all.go 
+package repo
+
+import "sportsstore/models"
+
+func (repo *SqlRepository) GetOrders() []models.Order {
+	orderMap := make(map[int]*models.Order, 10)
+	orderRows, err := repo.Commands.GetOrders.QueryContext(repo.Context)
+	if err != nil {
+		repo.Logger.Panicf("Cannot exec GetOrders command: %v", err.Error())
+	}
+	for orderRows.Next() {
+		order := models.Order{Products: []models.ProductSelection{}}
+		err = orderRows.Scan(&order.ID, &order.Name, &order.StreetAddr, &order.City, &order.Zip, &order.Country, &order.Shipped)
+		if err != nil {
+			repo.Logger.Panicf("Cannot scan order data: %v", err.Error())
+			return []models.Order{}
+		}
+		orderMap[order.ID] = &order
+	}
+	lineRows, err := repo.Commands.GetOrdersLines.QueryContext(repo.Context)
+	if err != nil {
+		repo.Logger.Panicf("Cannot exec GetOrdersLines command: %v", err.Error())
+	}
+	for lineRows.Next() {
+		var order_id int
+		ps := models.ProductSelection{Product: models.Product{}}
+		err = lineRows.Scan(&order_id, &ps.Quantity, &ps.Product.ID, &ps.Product.Name, &ps.Product.Description,
+			&ps.Product.Price, &ps.Product.Category.ID, &ps.Product.Category.CategoryName)
+		if err == nil {
+			orderMap[order_id].Products = append(orderMap[order_id].Products, ps)
+		} else {
+			repo.Logger.Panicf("Cannot scan order line data: %v", err.Error())
+		}
+	}
+	orders := make([]models.Order, 0, len(orderMap))
+	for _, o := range orderMap {
+		orders = append(orders, *o)
+	}
+	return orders
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_orders_one.go 
+package repo
+
+import "sportsstore/models"
+
+func (repo *SqlRepository) GetOrder(id int) (order models.Order) {
+	order = models.Order{Products: []models.ProductSelection{}}
+	row := repo.Commands.GetOrder.QueryRowContext(repo.Context, id)
+	if row.Err() == nil {
+		err := row.Scan(&order.ID, &order.Name, &order.StreetAddr, &order.City, &order.Zip, &order.Country, &order.Shipped)
+		if err != nil {
+			repo.Logger.Panicf("Cannot scan order data: %v", err.Error())
+			return
+		}
+		lineRows, err := repo.Commands.GetOrderLines.QueryContext(repo.Context, id)
+		if err == nil {
+			for lineRows.Next() {
+				ps := models.ProductSelection{Product: models.Product{Category: &models.Category{}}}
+				err = lineRows.Scan(&ps.Quantity, &ps.Product.ID, &ps.Product.Name, &ps.Product.Description, &ps.Product.Price,
+					&ps.Product.Category.ID, &ps.Product.Category.CategoryName)
+				if err == nil {
+					order.Products = append(order.Products, ps)
+				} else {
+					repo.Logger.Panicf("Cannot scan order line data: %v", err.Error())
+				}
+			}
+		} else {
+			repo.Logger.Panicf("Cannot exec GetOrderLines command: %v", err.Error())
+		}
+	} else {
+		repo.Logger.Panicf("Cannot exec GetOrder command: %v", row.Err().Error())
+	}
+	return
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_orders_save.go 
+package repo
+
+import "sportsstore/models"
+
+func (repo *SqlRepository) SaveOrder(order *models.Order) {
+	tx, err := repo.DB.Begin()
+	if err != nil {
+		repo.Logger.Panicf("Cannot create transaction: %v", err.Error())
+		return
+	}
+	result, err := tx.StmtContext(repo.Context, repo.Commands.SaveOrder).Exec(order.Name, order.StreetAddr,
+		order.City, order.Zip, order.Country, order.Shipped)
+	if err != nil {
+		repo.Logger.Panicf("Cannot exec SaveOrder command: %v", err.Error())
+		tx.Rollback()
+		return
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		repo.Logger.Panicf("Cannot get inserted ID: %v", err.Error())
+		tx.Rollback()
+		return
+	}
+	statement := tx.StmtContext(repo.Context, repo.Commands.SaveOrderLine)
+	for _, sel := range order.Products {
+		_, err = statement.Exec(id, sel.Product.ID, sel.Quantity)
+		if err != nil {
+			repo.Logger.Panicf("Cannot exec SaveOrderLine command: %v", err.Error())
+			tx.Rollback()
+			return
+		}
+	}
+	err = tx.Commit()
+	if err != nil {
+		repo.Logger.Panicf("Transaction cannot be committed: %v", err.Error())
+		err = tx.Rollback()
+		if err != nil {
+			repo.Logger.Panicf("Transaction cannot be rolled back: %v", err.Error())
+		}
+	}
+	order.ID = int(id)
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_order_update.go 
+package repo
+
+import "sportsstore/models"
+
+func (repo *SqlRepository) SetOrderShipped(o *models.Order) {
+	result, err :=
+		repo.Commands.UpdateOrder.ExecContext(repo.Context,
+			o.Shipped, o.ID)
+	if err == nil {
+		rows, err := result.RowsAffected()
+		if err != nil {
+			repo.Logger.Panicf("Cannot get updated ID: %v",
+				err.Error())
+		} else if rows != 1 {
+			repo.Logger.Panicf("Got unexpected rows affected: %v",
+				rows)
+		}
+	} else {
+		repo.Logger.Panicf("Cannot exec UpdateOrder command: %v",
+			err.Error())
+	}
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_page_methods.go 
+package repo
+
+import "sportsstore/models"
+
+func (repo *SqlRepository) GetProductPage(page, pageSize int) (products []models.Product, totalAvailable int) {
+	rows, err := repo.Commands.GetPage.QueryContext(repo.Context, pageSize, (pageSize*page)-pageSize)
+	if err == nil {
+		if products, err = scanProducts(rows); err != nil {
+			repo.Logger.Panicf("Cannot scan data: %v", err.Error())
+			return
+		}
+	} else {
+		repo.Logger.Panicf("Cannot exec GetProductPage command: %v", err)
+		return
+	}
+	row := repo.Commands.GetPageCount.QueryRowContext(repo.Context)
+	if row.Err() == nil {
+		if err := row.Scan(&totalAvailable); err != nil {
+			repo.Logger.Panicf("Cannot scan data: %v", err.Error())
+		}
+	} else {
+		repo.Logger.Panicf("Cannot exec GetPageCount command: %v", row.Err().Error())
+	}
+	return
+}
+
+func (repo *SqlRepository) GetProductPageCategory(categoryId, page, pageSize int) (products []models.Product, totalAvailable int) {
+	if categoryId == 0 {
+		return repo.GetProductPage(page, pageSize)
+	}
+	rows, err := repo.Commands.GetCategoryPage.QueryContext(repo.Context, categoryId, pageSize, (pageSize*page)-pageSize)
+	if err == nil {
+		if products, err = scanProducts(rows); err != nil {
+			repo.Logger.Panicf("Cannot scan data: %v", err.Error())
+			return
+		}
+	} else {
+		repo.Logger.Panicf("Cannot exec GetProductPage command: %v", err)
+		return
+	}
+	row := repo.Commands.GetCategoryPageCount.QueryRowContext(repo.Context, categoryId)
+	if row.Err() == nil {
+		if err := row.Scan(&totalAvailable); err != nil {
+			repo.Logger.Panicf("Cannot scan data: %v", err.Error())
+		}
+	} else {
+		repo.Logger.Panicf("Cannot exec GetCategoryPageCount command: %v", row.Err().Error())
+	}
+	return
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_products_save.go 
+package repo
+
+import "sportsstore/models"
+
+func (repo *SqlRepository) SaveProduct(p *models.Product) {
+	if p.ID == 0 {
+		result, err := repo.Commands.SaveProduct.ExecContext(repo.Context, p.Name, p.Description, p.Category.ID, p.Price)
+		if err == nil {
+			id, err := result.LastInsertId()
+			if err == nil {
+				p.ID = int(id)
+				return
+			}
+			repo.Logger.Panicf("Cannot get inserted ID: %v", err.Error())
+		} else {
+			repo.Logger.Panicf("Cannot exec SaveProduct command: %v", err.Error())
+		}
+	} else {
+		result, err := repo.Commands.UpdateProduct.ExecContext(repo.Context, p.Name, p.Description, p.Category.ID, p.Price, p.ID)
+		if err == nil {
+			affected, err := result.RowsAffected()
+			if err == nil && affected != 1 {
+				repo.Logger.Panicf("Got unexpected rows affected: %v", affected)
+			} else if err != nil {
+				repo.Logger.Panicf("Cannot get rows affected: %v", err)
+			}
+		} else {
+			repo.Logger.Panicf("Cannot exec Update command: %v", err.Error())
+		}
+	}
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_repo.go 
+package repo
+
+import (
+	"context"
+	"database/sql"
+	"platform/config"
+	"platform/logging"
+)
+
+type SqlRepository struct {
+	config.Configuration
+	logging.Logger
+	Commands SqlCommands
+	*sql.DB
+	context.Context
+}
+
+type SqlCommands struct {
+	Init,
+	Seed,
+	GetProduct,
+	GetProducts,
+	GetCategories,
+	GetPage,
+	GetPageCount,
+	GetCategoryPage,
+	GetCategoryPageCount,
+	GetOrder,
+	GetOrderLines,
+	GetOrders,
+	GetOrdersLines,
+	SaveOrder,
+	SaveOrderLine,
+	SaveProduct,
+	UpdateProduct,
+	SaveCategory,
+	UpdateCategory,
+	UpdateOrder *sql.Stmt
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_scan.go 
+package repo
+
+import (
+	"database/sql"
+	"sportsstore/models"
+)
+
+func scanProduct(row *sql.Row) (p models.Product, err error) {
+	p = models.Product{Category: &models.Category{}}
+	err = row.Scan(&p.ID, &p.Name, &p.Description, &p.Price, &p.Category.ID, &p.Category.CategoryName)
+	return
+}
+
+func scanProducts(rows *sql.Rows) (products []models.Product, err error) {
+	products = make([]models.Product, 0, 10)
+	for rows.Next() {
+		p := models.Product{Category: &models.Category{}}
+		err = rows.Scan(&p.ID, &p.Name, &p.Description, &p.Price, &p.Category.ID, &p.Category.CategoryName)
+		if err == nil {
+			products = append(products, p)
+		} else {
+			return
+		}
+	}
+	return
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\models\repo\sql_service.go 
+package repo
+
+import (
+	"context"
+	"database/sql"
+	"platform/config"
+	"platform/logging"
+	"platform/services"
+	"sportsstore/models"
+	"sync"
+)
+
+func RegisterSqlRepositoryService() {
+	var db *sql.DB
+	var commands *SqlCommands
+	var needInit bool
+	loadOnce := sync.Once{}
+	resetOnce := sync.Once{}
+	services.AddScoped(func(ctx context.Context, config config.Configuration, logger logging.Logger) models.Repository {
+		loadOnce.Do(func() {
+			db, commands, needInit = openDB(config, logger)
+		})
+		repo := &SqlRepository{
+			Configuration: config,
+			Logger:        logger,
+			Commands:      *commands,
+			DB:            db,
+			Context:       ctx,
+		}
+		resetOnce.Do(func() {
+			if needInit || config.GetBoolDefault("sql:always_reset", true) {
+				repo.Init()
+				repo.Seed()
+			}
+		})
+		return repo
+	})
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\store\cart_handler.go 
+package store
+
+import (
+	"platform/http/actionresults"
+	"platform/http/handling"
+	"sportsstore/models"
+	"sportsstore/store/cart"
+)
+
+type CartHandler struct {
+	models.Repository
+	cart.Cart
+	handling.URLGenerator
+}
+type CartTemplateContext struct {
+	cart.Cart
+	ProductListUrl string
+	CartUrl        string
+	CheckoutUrl    string
+	RemoveUrl      string
+}
+
+func (handler CartHandler) GetCart() actionresults.ActionResult {
+	return actionresults.NewTemplateAction("cart.html",
+		CartTemplateContext{
+			Cart:           handler.Cart,
+			ProductListUrl: handler.mustGenerateUrl(ProductHandler.GetProducts, 0, 1),
+			CheckoutUrl:    handler.mustGenerateUrl(OrderHandler.GetCheckout),
+			RemoveUrl:      handler.mustGenerateUrl(CartHandler.PostRemoveFromCart),
+		})
+}
+
+type CartProductReference struct {
+	ID int
+}
+
+func (handler CartHandler) PostAddToCart(ref CartProductReference) actionresults.ActionResult {
+	p := handler.Repository.GetProduct(ref.ID)
+	handler.Cart.AddProduct(p)
+	return actionresults.NewRedirectAction(
+		handler.mustGenerateUrl(CartHandler.GetCart))
+}
+func (handler CartHandler) PostRemoveFromCart(ref CartProductReference) actionresults.ActionResult {
+	handler.Cart.RemoveLineForProduct(ref.ID)
+	return actionresults.NewRedirectAction(
+		handler.mustGenerateUrl(CartHandler.GetCart))
+}
+func (handler CartHandler) mustGenerateUrl(method interface{}, data ...interface{}) string {
+	url, err := handler.URLGenerator.GenerateUrl(method, data...)
+	if err != nil {
+		panic(err)
+	}
+	return url
+}
+
+func (handler CartHandler) GetWidget() actionresults.ActionResult {
+	return actionresults.NewTemplateAction("cart_widget.html", CartTemplateContext{
+		Cart:    handler.Cart,
+		CartUrl: handler.mustGenerateUrl(CartHandler.GetCart),
+	})
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\store\category_handler.go 
+package store
+
+import (
+	"platform/http/actionresults"
+	"platform/http/handling"
+	"sportsstore/models"
+)
+
+type CategoryHandler struct {
+	Repository   models.Repository
+	URLGenerator handling.URLGenerator
+}
+type categoryTemplateContext struct {
+	Categories       []models.Category
+	SelectedCategory int
+	CategoryUrlFunc  func(int) string
+}
+
+func (handler CategoryHandler) GetButtons(selected int) actionresults.ActionResult {
+	return actionresults.NewTemplateAction("category_buttons.html",
+		categoryTemplateContext{
+			Categories:       handler.Repository.GetCategories(),
+			SelectedCategory: selected,
+			CategoryUrlFunc:  handler.createCategoryFilterFunction(),
+		})
+}
+func (handler CategoryHandler) createCategoryFilterFunction() func(int) string {
+	return func(category int) string {
+		url, _ := handler.URLGenerator.GenerateUrl(ProductHandler.GetProducts, category, 1)
+		return url
+	}
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\store\order_handler.go 
+package store
+
+import (
+	"encoding/json"
+	"platform/http/actionresults"
+	"platform/http/handling"
+	"platform/sessions"
+	"platform/validation"
+	"sportsstore/models"
+	"sportsstore/store/cart"
+	"strings"
+)
+
+type OrderHandler struct {
+	cart.Cart
+	sessions.Session
+	Repository   models.Repository
+	URLGenerator handling.URLGenerator
+	validation.Validator
+}
+
+type OrderTemplateContext struct {
+	models.ShippingDetails
+	ValidationErrors [][]string
+	CancelUrl        string
+}
+
+func (handler OrderHandler) GetCheckout() actionresults.ActionResult {
+	ctx := OrderTemplateContext{}
+	jsonData := handler.Session.GetValueDefault("checkout_details", "")
+	if jsonData != nil {
+		json.NewDecoder(strings.NewReader(jsonData.(string))).Decode(&ctx)
+	}
+	ctx.CancelUrl = mustGenerateUrl(handler.URLGenerator, CartHandler.GetCart)
+	return actionresults.NewTemplateAction("checkout.html", ctx)
+}
+
+func (handler OrderHandler) PostCheckout(details models.ShippingDetails) actionresults.ActionResult {
+	valid, errors := handler.Validator.Validate(details)
+	if !valid {
+		ctx := OrderTemplateContext{
+			ShippingDetails:  details,
+			ValidationErrors: [][]string{},
+		}
+		for _, err := range errors {
+			ctx.ValidationErrors = append(ctx.ValidationErrors,
+				[]string{err.FieldName, err.Error.Error()})
+		}
+		builder := strings.Builder{}
+		json.NewEncoder(&builder).Encode(ctx)
+		handler.Session.SetValue("checkout_details", builder.String())
+		redirectUrl := mustGenerateUrl(handler.URLGenerator, OrderHandler.GetCheckout)
+		return actionresults.NewRedirectAction(redirectUrl)
+	} else {
+		handler.Session.SetValue("checkout_details", "")
+	}
+	order := models.Order{
+		ShippingDetails: details,
+		Products:        []models.ProductSelection{},
+	}
+	for _, cl := range handler.Cart.GetLines() {
+		order.Products = append(order.Products,
+			models.ProductSelection{
+				Quantity: cl.Quantity,
+				Product:  cl.Product,
+			})
+	}
+	handler.Repository.SaveOrder(&order)
+	handler.Cart.Reset()
+	targetUrl, _ := handler.URLGenerator.GenerateUrl(OrderHandler.GetSummary, order.ID)
+	return actionresults.NewRedirectAction(targetUrl)
+}
+func (handler OrderHandler) GetSummary(id int) actionresults.ActionResult {
+	targetUrl, _ := handler.URLGenerator.GenerateUrl(ProductHandler.GetProducts, 0, 1)
+	return actionresults.NewTemplateAction("checkout_summary.html",
+		struct {
+			ID        int
+			TargetUrl string
+		}{ID: id, TargetUrl: targetUrl})
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\store\product_handler.go 
+package store
+
+import (
+	"math"
+	"platform/http/actionresults"
+	"platform/http/handling"
+	"sportsstore/models"
+)
+
+const pageSize = 4
+
+type ProductHandler struct {
+	Repository   models.Repository
+	URLGenerator handling.URLGenerator
+}
+type ProductTemplateContext struct {
+	Products         []models.Product
+	Page             int
+	PageCount        int
+	PageNumbers      []int
+	PageUrlFunc      func(int) string
+	SelectedCategory int
+	AddToCartUrl     string
+}
+
+func (handler ProductHandler) GetProducts(category, page int) actionresults.ActionResult {
+	prods, total := handler.Repository.GetProductPageCategory(category, page, pageSize)
+	pageCount := int(math.Ceil(float64(total) / float64(pageSize)))
+	return actionresults.NewTemplateAction("product_list.html",
+		ProductTemplateContext{
+			Products:         prods,
+			Page:             page,
+			PageCount:        pageCount,
+			PageNumbers:      handler.generatePageNumbers(pageCount),
+			PageUrlFunc:      handler.createPageUrlFunction(category),
+			SelectedCategory: category,
+			AddToCartUrl:     mustGenerateUrl(handler.URLGenerator, CartHandler.PostAddToCart),
+		})
+}
+
+func (handler ProductHandler) generatePageNumbers(pageCount int) (pages []int) {
+	pages = make([]int, pageCount)
+	for i := range pageCount {
+		pages[i] = i + 1
+	}
+	return
+}
+
+func (handler ProductHandler) createPageUrlFunction(category int) func(int) string {
+	return func(page int) string {
+		url, _ := handler.URLGenerator.GenerateUrl(ProductHandler.GetProducts, category, page)
+		return url
+	}
+}
+
+func mustGenerateUrl(generator handling.URLGenerator, target interface{}) string {
+	url, err := generator.GenerateUrl(target)
+	if err != nil {
+		panic(err)
+	}
+	return url
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\store\cart\cart.go 
+package cart
+
+import "sportsstore/models"
+
+type CartLine struct {
+	models.Product
+	Quantity int
+}
+
+func (cl *CartLine) GetLineTotal() float64 {
+	return cl.Price * float64(cl.Quantity)
+}
+
+type Cart interface {
+	AddProduct(models.Product)
+	GetLines() []*CartLine
+	RemoveLineForProduct(id int)
+	GetItemCount() int
+	GetTotal() float64
+	Reset()
+}
+type BasicCart struct {
+	lines []*CartLine
+}
+
+func (cart *BasicCart) AddProduct(p models.Product) {
+	for _, line := range cart.lines {
+		if line.Product.ID == p.ID {
+			line.Quantity++
+			return
+		}
+	}
+	cart.lines = append(cart.lines, &CartLine{
+		Product: p, Quantity: 1,
+	})
+}
+func (cart *BasicCart) GetLines() []*CartLine {
+	return cart.lines
+}
+func (cart *BasicCart) RemoveLineForProduct(id int) {
+	for index, line := range cart.lines {
+		if line.Product.ID == id {
+			cart.lines = append(cart.lines[0:index], cart.lines[index+1:]...)
+		}
+	}
+}
+func (cart *BasicCart) GetItemCount() (total int) {
+	for _, l := range cart.lines {
+		total += l.Quantity
+	}
+	return
+}
+func (cart *BasicCart) GetTotal() (total float64) {
+	for _, line := range cart.lines {
+		total += float64(line.Quantity) * line.Product.Price
+	}
+	return
+}
+func (cart *BasicCart) Reset() {
+	cart.lines = []*CartLine{}
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\store\cart\cart_service.go 
+package cart
+
+import (
+	"encoding/json"
+	"platform/services"
+	"platform/sessions"
+	"sportsstore/models"
+	"strings"
+)
+
+const CART_KEY string = "cart"
+
+func RegisterCartService() {
+	services.AddScoped(func(session sessions.Session) Cart {
+		lines := []*CartLine{}
+		sessionVal := session.GetValue(CART_KEY)
+		if strVal, ok := sessionVal.(string); ok {
+			json.NewDecoder(strings.NewReader(strVal)).Decode(&lines)
+		}
+		return &sessionCart{
+			BasicCart: &BasicCart{lines: lines},
+			Session:   session,
+		}
+	})
+}
+
+type sessionCart struct {
+	*BasicCart
+	sessions.Session
+}
+
+func (sc *sessionCart) AddProduct(p models.Product) {
+	sc.BasicCart.AddProduct(p)
+	sc.SaveToSession()
+}
+func (sc *sessionCart) RemoveLineForProduct(id int) {
+	sc.BasicCart.RemoveLineForProduct(id)
+	sc.SaveToSession()
+}
+func (sc *sessionCart) SaveToSession() {
+	builder := strings.Builder{}
+	json.NewEncoder(&builder).Encode(sc.lines)
+	sc.Session.SetValue(CART_KEY, builder.String())
+}
+func (sc *sessionCart) Reset() {
+	sc.lines = []*CartLine{}
+	sc.SaveToSession()
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\store\cart\cart_test.go 
+package cart
+
+import (
+	"sportsstore/models"
+	"testing"
+)
+
+// Тест для BasicCart (реализация Cart интерфейса)
+// Проверяем базовые операции: добавление, подсчёт суммы, удаление, сброс
+
+func TestBasicCart_AddProduct(t *testing.T) {
+	// Создаём пустую корзину
+	cart := &BasicCart{}
+
+	// Тестовый продукт
+	product1 := models.Product{ID: 1, Price: 10.0}
+	product2 := models.Product{ID: 2, Price: 20.0}
+
+	// Добавляем первый продукт
+	cart.AddProduct(product1)
+	if len(cart.GetLines()) != 1 {
+		t.Errorf("Expected 1 line after adding first product, got %d", len(cart.GetLines()))
+	}
+
+	// Добавляем тот же продукт — количество должно вырасти
+	cart.AddProduct(product1)
+	if len(cart.GetLines()) != 1 || cart.GetLines()[0].Quantity != 2 {
+		t.Errorf("Expected quantity 2 for product1, got %d", cart.GetLines()[0].Quantity)
+	}
+
+	// Добавляем второй продукт
+	cart.AddProduct(product2)
+	if len(cart.GetLines()) != 2 {
+		t.Errorf("Expected 2 lines after adding second product, got %d", len(cart.GetLines()))
+	}
+}
+ 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\admin.html 
+{{ $context := . }}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width" />
+    <title>SportsStore</title>
+    <link href="/files/bootstrap.min.css" rel="stylesheet" />
+</head>
+<body>
+    <div class="bg-info text-white p-2">
+        <div class="container-fluid">
+            <div class="row">
+                <div class="col navbar-brand">SPORTS STORE Administration</div>
+            </div>
+        </div>
+    </div>
+    <div class="row m-1 p-1">
+        <div id="sidebar" class="col-3">
+            <div class="d-grid gap-2">
+                {{ range $context.Sections }}
+                    <a href="{{ call $context.SectionUrlFunc . }}"
+                        {{ if eq . $context.ActiveSection }}
+                            class="btn btn-info">
+                        {{ else }}
+                            class="btn btn-outline-info">
+                        {{ end }}
+                        {{ . }}
+                    </a>
+                {{ end }}
+            </div>
+        </div>
+        <div class="col-9">
+            {{ if eq $context.ActiveSection ""}}
+            <h6 class="p-2">
+                Welcome to the SportsStore Administration Features
+            </h6>
+            {{ else }}
+                {{ handler $context.ActiveSection "getdata" }}
+            {{ end }}
+        </div>
+    </div>
+</body>
+</html> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\admin_categories.html 
+{{ $context := . }}
+<table class="table table-sm table-striped table-bordered">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {{ range $context.Categories }}
+            {{ if ne $context.EditId .ID }}
+                <!-- Режим отображения категории -->
+                <tr>
+                    <td>{{ .ID }}</td>
+                    <td>{{ .CategoryName }}</td>
+                    <td class="text-center">
+                        <form method="POST" action="{{ $context.EditUrl }}">
+                            <input type="hidden" name="id" value="{{ .ID }}" />
+                            <button class="btn btn-sm btn-warning" type="submit">
+                                Edit
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+            {{ else }}
+                <!-- Режим редактирования категории -->
+                <tr>
+                    <form method="POST" action="{{ $context.SaveUrl }}">
+                        <input type="hidden" name="id" value="{{ .ID }}" />
+                        <td>
+                            <input class="form-control" disabled value="{{ .ID }}" size="3" />
+                        </td>
+                        <td>
+                            <input name="categoryname" class="form-control" size="12" value="{{ .CategoryName }}" />
+                        </td>
+                        <td class="text-center">
+                            <button class="btn btn-sm btn-danger" type="submit">
+                                Save
+                            </button>
+                        </td>
+                    </form>
+                </tr>
+            {{ end }}
+        {{ end }}
+    </tbody>
+    {{ if eq $context.EditId 0 }}
+        <!-- Форма добавления новой категории -->
+        <tfoot>
+            <tr>
+                <td colspan="3" class="text-center">Add New Category</td>
+            </tr>
+            <tr>
+                <form method="POST" action="{{ $context.SaveUrl }}">
+                    <td>-</td>
+                    <td>
+                        <input name="categoryname" class="form-control" size="12" />
+                    </td>
+                    <td class="text-center">
+                        <button class="btn btn-sm btn-danger" type="submit">
+                            Save
+                        </button>
+                    </td>
+                </form>
+            </tr>
+        </tfoot>
+    {{ end }}
+</table> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\admin_database.html 
+{{ $context := . }}
+<form method="POST">
+    <button class="btn btn-danger m-3 p-2" type="submit" formaction="{{ $context.InitUrl}}">
+        Initialize Database
+    </button>
+    <button class="btn btn-warning m-3 p-2" type="submit" formaction="{{ $context.SeedUrl}}">
+        Seed Database
+    </button>
+</form> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\admin_orders.html 
+{{ $context := . }}
+<table class="table table-sm table-striped table-bordered">
+    <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Address</th>
+        <th/> <!-- Пустой заголовок для кнопок действий -->
+    </tr>
+    <tbody>
+    {{ range $context.Orders }}
+        <!-- Строка с основной информацией о заказе -->
+        <tr>
+            <td>{{ .ID }}</td>
+            <td>{{ .Name }}</td>
+            <td>
+                {{ .StreetAddr }}, {{ .City }}, {{ .State }}, 
+                {{ .Country }}, {{ .Zip }}
+            </td>
+            <td>
+                <!-- Форма для изменения статуса доставки -->
+                <form method="POST" action="{{ $context.CallbackUrl }}">
+                    <input type="hidden" name="id" value="{{ .ID }}" />
+                    
+                    {{ if .Shipped }}
+                        <!-- Если заказ уже доставлен -->
+                        <button class="btn-btn-sm btn-warning" type="submit">
+                            Ship Order
+                        </button>
+                    {{ else }}
+                        <!-- Если заказ не доставлен -->
+                        <button class="btn-btn-sm btn-danger" type="submit">
+                            Mark Unshipped
+                        </button>
+                    {{ end }}
+                </form>
+            </td>
+        </tr>
+        
+        <!-- Подзаголовок для товаров в заказе -->
+        <tr>
+            <th colspan="2"/> <!-- Пустые ячейки, занимающие 2 колонки -->
+            <th>Quantity</th>
+            <th>Product</th>
+        </tr>
+        
+        <!-- Перебор товаров в текущем заказе -->
+        {{ range .Products }}
+            <tr>
+                <td colspan="2"/> <!-- Пустые ячейки для выравнивания -->
+                <td>{{ .Quantity }}</td> <!-- Количество товара -->
+                <td>{{ .Product.Name }}</td> <!-- Название товара -->
+            </tr>
+        {{ end }}
+        
+    {{ end }}
+    </tbody>
+</table> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\admin_products.html 
+{{ $context := . }}
+<table class="table table-sm table-striped table-bordered">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Description</th>
+            <th>Category</th>
+            <th class="text-end">Price</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {{ range $context.Products }}
+            {{ if ne $context.EditId .ID }}
+                <!-- Режим отображения продукта -->
+                <tr>
+                    <td>{{ .ID }}</td>
+                    <td>{{ .Name }}</td>
+                    <td>
+                        <span class="d-inline-block text-truncate" style="max-width: 200px;">
+                            {{ .Description }}
+                        </span>
+                    </td>
+                    <td>{{ .CategoryName }}</td>
+                    <td class="text-end">{{ printf "$%.2f" .Price }}</td>
+                    <td class="text-center">
+                        <form method="POST" action="{{ $context.EditUrl }}">
+                            <input type="hidden" name="id" value="{{ .ID }}" />
+                            <button class="btn btn-sm btn-warning" type="submit">
+                                Edit
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+            {{ else }}
+                <!-- Режим редактирования продукта -->
+                <tr>
+                    <form method="POST" action="{{ $context.SaveUrl }}">
+                        <input type="hidden" name="id" value="{{ .ID }}" />
+                        <td>
+                            <input class="form-control" disabled value="{{ .ID }}" size="3" />
+                        </td>
+                        <td>
+                            <input name="name" class="form-control" size="12" value="{{ .Name }}" />
+                        </td>
+                        <td>
+                            <input name="description" class="form-control" size="15" value="{{ .Description }}" />
+                        </td>
+                        <td>
+                            {{ handler "categories" "getselect" .Category.ID }}
+                        </td>
+                        <td>
+                            <input name="price" class="form-control text-end" size="7" value="{{ .Price }}" />
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-danger" type="submit">
+                                Save
+                            </button>
+                        </td>
+                    </form>
+                </tr>
+            {{ end }}
+        {{ end }}
+    </tbody>
+    {{ if eq $context.EditId 0 }}
+        <!-- Форма добавления нового продукта -->
+        <tfoot>
+            <tr>
+                <td colspan="6" class="text-center">Add New Product</td>
+            </tr>
+            <tr>
+                <form method="POST" action="{{ $context.SaveUrl }}">
+                    <td>-</td>
+                    <td>
+                        <input name="name" class="form-control" size="12" />
+                    </td>
+                    <td>
+                        <input name="description" class="form-control" size="15" />
+                    </td>
+                    <td>
+                        {{ handler "categories" "getselect" 0 }}
+                    </td>
+                    <td>
+                        <input name="price" class="form-control" size="7" />
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-danger" type="submit">
+                            Save
+                        </button>
+                    </td>
+                </form>
+            </tr>
+        </tfoot>
+    {{ end }}
+</table> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\cart.html 
+{{ layout "simple_layout.html" }}
+{{ $context := . }}
+
+<div class="p-1">
+    <h2>Your cart</h2>
+    <table class="table table-bordered table-striped">
+        <thead>
+            <tr>
+                <th>Quantity</th><th>Item</th>
+                <th class="text-end">Price</th>
+                <th class="text-end">Subtotal</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ range $context.Cart.GetLines }}
+                <tr>
+                    <td class="text-start">{{ .Quantity }}</td>
+                    <td class="text-start">{{ .Name }}</td>
+                    <td class="text-end">{{ printf "$%.2f" .Price }}</td>
+                    <td class="text-end">
+                        {{ printf "$%.2f" .GetLineTotal }}
+                    </td>
+                    <td>
+                        <form method="POST" action="{{  $context.RemoveUrl }}">
+                            <input type="hidden" name="id" value="{{ .ID }}" />
+                            <button class="btn btn-sm btn-danger" type="submit">
+                                Remove
+                            </button>
+                        </form>
+                    </td>                    
+                </tr>
+                
+            {{ end }}
+        </tbody>
+        <tfoot>
+            <tr>
+                <td colspan="3" class="text-end">Total:</td>
+                <td class="text-end">
+                    {{ printf "$%.2f" $context.Cart.GetTotal }}
+                </td>
+            </tr>
+        </tfoot>
+    </table>
+    <div class="text-center">
+        <a class="btn btn-secondary" href="{{ $context.ProductListUrl }}">
+            Continue shopping
+        </a>
+        <a class="btn btn-primary" href="{{ $context.CheckoutUrl }}">
+            Checkout
+        </a>
+    </div>
+</div> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\cart_widget.html 
+{{ $context := . }}
+{{ $count := $context.Cart.GetItemCount }}
+<small class="navbar-text">
+    {{ if gt $count 0 }}
+        <b>Your cart:</b>
+        {{ $count }} item(s)
+        {{ printf "$%.2f" $context.Cart.GetTotal }}
+    {{ else }}
+        <span class="px-2 text-secondary">(empty cart)</span>
+    {{ end }}
+</small>
+<a href="{{ $context.CartUrl }}" class="btn btn-sm btn-secondary navbar-btn">
+    <i class="fa fa-shopping-cart"></i>
+</a> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\category_buttons.html 
+{{ $context := . }}
+<div class="d-grid gap-2">
+    <a 
+        {{ if eq $context.SelectedCategory 0 }}
+            class="btn btn-primary"
+        {{ else }}
+            class="btn btn-outline-primary"
+        {{ end }}
+        href="{{ call $context.CategoryUrlFunc 0 }}">
+        All
+    </a>
+    
+    {{ range $context.Categories }}
+        <a 
+            {{ if eq $context.SelectedCategory .ID }}
+                class="btn btn-primary"
+            {{ else }}
+                class="btn btn-outline-primary"
+            {{ end }}
+            href="{{ call $context.CategoryUrlFunc .ID }}">
+            {{ .CategoryName }}
+        </a>
+    {{ end }}
+</div> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\checkout.html 
+{{ layout "simple_layout.html" }}
+{{ $context := .}}
+{{ $details := .ShippingDetails }}
+<div class="p-2">
+    <h2>Check out now</h2>
+    Please enter your details, and we'll ship your goods right away!
+</div>
+{{ if gt (len $context.ValidationErrors) 0}}
+    <ul class="text-danger mt-3">
+        {{ range $context.ValidationErrors }}
+            <li>
+                {{ index . 0 }}: {{ index . 1 }}
+            </li>
+        {{ end }}
+    </ul>
+{{ end }}
+<form method="POST" class="p-2">
+    <h3>Ship to</h3>
+    <div class="form-group">
+        <label class="form-label">Name:</label>
+        <input name="name" class="form-control" value="{{ $details.Name }}" />
+    </div>
+    <div class="form-group">
+        <label>Street Address:</label>
+        <input name="streetaddr" class="form-control" value="{{ $details.StreetAddr }}" />
+    </div>
+    <div class="form-group">
+        <label>City:</label>
+        <input name="city" class="form-control" value="{{ $details.City }}" />
+    </div>
+    <div class="form-group">
+        <label>State:</label>
+        <input name="state" class="form-control" value="{{ $details.State }}" />
+    </div>
+    <div class="form-group">
+        <label>Zip:</label>
+        <input name="zip" class="form-control" value="{{ $details.Zip }}" />
+    </div>
+    <div class="form-group">
+        <label>Country:</label>
+        <input name="country" class="form-control" value="{{ $details.Country }}" />
+    </div>
+    <div class="text-center py-1">
+        <a class="btn btn-secondary m-1" href="{{ $context.CancelUrl }}">Cancel</a>
+        <button class="btn btn-primary m-1" type="submit">Submit</button>
+    </div>
+</form> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\checkout_summary.html 
+{{ layout "simple_layout.html" }}
+{{ $context := . }}
+
+<div class="text-center m-3">
+    <h2>Thanks!</h2>
+    <p>Thanks for placing order #{{ $context.ID }} </p>
+    <p>We'll ship your goods as soon as possible.</p>
+    <a class="btn btn-primary" href="{{ $context.TargetUrl }}">
+        Return to Store
+    </a>
+</div> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\page_buttons.html 
+{{ $context := . }}
+<div class="btn-group pull-right m-1">
+    {{ range .PageNumbers}}
+        {{ if eq $context.Page .}}
+            <a class="btn btn-primary">{{ . }}</a>
+        {{ else }}
+            <a href="{{ call $context.PageUrlFunc . }}" class="btn btn-outline-primary">{{ . }}</a>
+        {{ end }}
+    {{ end }}
+</div> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\product_list.html 
+{{ layout "store_layout.html" }}
+
+{{ define "left_column" }}
+    {{ $context := . }}
+    {{ handler "category" "getbuttons" $context.SelectedCategory}}
+{{end}}
+
+{{ define "right_column" }}
+    {{ $context := . }}
+    {{ range $context.Products }}
+        <div class="card card-outline-primary m-1 p-1">
+            <div class="bg-faded p-1">
+                <h4>
+                    {{ .Name }}
+                    <span class="badge rounded-pill bg-primary" style="float:right">
+                        <small>{{ printf "$%.2f" .Price }}</small>
+                    </span>
+                </h4>
+            </div>
+            <div class="card-text p-1">
+                <form method="POST" action="{{ $context.AddToCartUrl }}">
+                    {{ .Description }}
+                    <input type="hidden" name="id" value="{{.ID}}" />
+                    <button type="submit"class="btn btn-success btn-sm pull-right" 
+                        style="float:right">
+                            Add To Cart
+                    </button>                    
+                </form>
+            </div>
+        </div>
+    {{ end }}
+    {{ template "page_buttons.html" $context }}
+{{end}} 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\select_category.html 
+{{ $context := . }}
+<select class="form-select" name="category" value="{{ $context.Current }}">
+    <option value="0">Select a category</option>
+    {{ range $context.Categories }}
+        <option value="{{ .ID }}" {{ if eq $context.Current .ID }}selected{{ end }}>
+            {{ .CategoryName }}
+        </option>
+    {{ end }}
+</select> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\simple_layout.html 
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width" />
+    <title>SportsStore</title>
+    <link href="/files/bootstrap.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" />
+</head>
+<body> 
+    <div class="bg-dark text-white p-2">
+       <div class="container-fluid">
+            <div class="row">
+                <div class="col navbar-brand">SPORTS STORE</div>
+                <div class="col-6 navbar-text text-end">
+                    {{ handler "cart" "getwidget" }}
+                </div>
+            </div>
+        </div>
+    </div>
+    {{ body }}
+</body>
+</html> 
+--- 
+ 
+FILE: C:\Users\Glebateee\Desktop\redodo\sportsstore\templates\store_layout.html 
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width" />
+    <title>SportsStore</title>
+    <link href="/files/bootstrap.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" />
+</head>
+<body>
+    <div class="bg-dark text-white p-2">
+        <div class="container-fluid">
+            <div class="row">
+                <div class="col navbar-brand">SPORTS STORE</div>
+                <div class="col-6 navbar-text text-end">
+                    {{ handler "cart" "getwidget" }}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="row m-1 p-1">
+        <div id="sidebar" class="col-3">
+            {{ template "left_column" . }}
+        </div>
+        <div class="col-9">
+            {{ template "right_column" . }}
+        </div>
+    </div>
+</body>
+</html> 
+--- 
+ 
