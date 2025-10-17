@@ -5,9 +5,8 @@
     <title>SportsStore</title>
     <link href="/files/bootstrap.min.css" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" />
-
 </head>
-<body>
+<body> 
     <div class="bg-dark text-white p-2">
         <div class="container-fluid">
             <div class="row">
@@ -18,13 +17,6 @@
             </div>
         </div>
     </div>
-    <div class="row m-1 p-1">
-        <div id="sidebar" class="col-3">
-            {{ template "left_column" . }}
-        </div>
-        <div class="col-9">
-            {{ template "right_column" . }}
-        </div>
-    </div>
+    {{ body }}
 </body>
 </html>
