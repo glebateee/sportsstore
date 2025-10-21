@@ -14,4 +14,7 @@ type Repository interface {
 	SaveOrder(*Order)
 
 	SaveProduct(*Product)
+	SaveCategory(*Category)
+	SetOrderShipped(*Order)
+	Init()
 }

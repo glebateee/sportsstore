@@ -8,6 +8,6 @@ func (repo *SqlRepository) Init() {
 
 func (repo *SqlRepository) Seed() {
 	if _, err := repo.Commands.Seed.ExecContext(repo.Context); err != nil {
-		repo.Logger.Panic("Cannot exec seed command")
+		repo.Logger.Panic(err.Error())
 	}
 }
