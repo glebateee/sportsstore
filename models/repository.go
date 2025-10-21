@@ -12,4 +12,6 @@ type Repository interface {
 	GetOrder(id int) Order
 	GetOrders() []Order
 	SaveOrder(*Order)
+
+	SaveProduct(*Product)
 }
